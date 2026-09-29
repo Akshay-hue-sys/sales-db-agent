@@ -110,7 +110,10 @@ Launch the interactive Marimo developer interface to analyze session paths, toke
 
 Bash
 uv run marimo edit dashboard/traces_app.py
+
+
 📂 Project Structure
+
 Plaintext
 sales-db-agent/
 ├── dashboard/
