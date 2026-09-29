@@ -1,5 +1,11 @@
 # ⚡ Autonomous Sales Database Agent & Observability Engine
 
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![PostgreSQL 16+](https://img.shields.io/badge/PostgreSQL-16+-336791.svg)](https://www.postgresql.org/)
+[![pgvector](https://img.shields.io/badge/pgvector-HNSW-green.svg)](https://github.com/pgvector/pgvector)
+[![DuckDB](https://img.shields.io/badge/DuckDB-Columnar_OLAP-FFF000.svg)](https://duckdb.org/)
+[![Gemini API](https://img.shields.io/badge/Gemini_API-Function_Calling-orange.svg)](https://ai.google.dev/)
+
 A production-grade, autonomous SQL reasoning agent built with PostgreSQL, vector-based schema discovery, deterministic execution safeguards, an append-only DuckDB telemetry pipeline, and an automated LLM evaluation harness.
 
 ---
@@ -49,9 +55,44 @@ A production-grade, autonomous SQL reasoning agent built with PostgreSQL, vector
 
 ---
 
-## 🛡️️ Architectural Invariants & Safety Tripwires
+## 🗄️ Relational Schema Topology
 
-To prevent unpredictable agent execution, runaway spend, and database corruption, the runtime enforces the following guardrails:
+The operational database (`sales` schema) models multi-region enterprise transactions:
+
++---------------------+           +---------------------+
+|   sales.customers   |           |   sales.products    |
++---------------------+           +---------------------+
+| id (PK)             |           | id (PK)             |
+| name                |           | name                |
+| region              |           | category            |
+| signup_date         |           | unit_price          |
++----------+----------+           +----------+----------+
+|                                 |
+| 1:N                             | 1:N
++----------------+ +--------------+
+| |
+v v
++---------------------+
+|    sales.orders     |
++---------------------+
+| id (PK)             |
+| customer_id (FK)    |
+| product_id (FK)     |
+| quantity            |
+| total_amount        |
+| status              |
+| order_date          |
++---------------------+
+
+
+- **Topological Invariant:** Dimension tables (`customers`, `products`) act as root nodes (in-degree 0). Transactions (`orders`) act as leaf fact tables enforced by foreign key constraints.
+- **Semantic Metadata:** Table and column semantics are cataloged in `sales.schema_docs` and embedded via `pgvector` for semantic schema discovery.
+
+---
+
+## 🛡️ Architectural Invariants & Safety Tripwires
+
+To prevent unpredictable agent execution, cost overruns, and database corruption, the runtime enforces three core guardrails:
 
 1. **Deterministic Execution Limits:**
    - **Step Limit:** Hard cap of 6 reasoning iterations per query to terminate infinite ReAct loops.
@@ -86,13 +127,13 @@ Code snippet
 GEMINI_API_KEY="your-gemini-api-key"
 DATABASE_URL="postgresql://user:password@localhost:5432/sales"
 3. Initialize & Seed Database Schema
-Embed database metadata into pgvector and seed baseline analytical records:
+Embed database metadata into pgvector and seed analytical records:
 
 Bash
 # Baseline initialization
 uv run python scripts/seed_database.py
 
-# Optional: Seed expanded multi-region analytical fixtures
+# Seed expanded multi-region analytical fixtures
 uv run python scripts/seed_more_data.py
 💻 CLI Usage
 Invoke the autonomous reasoning agent directly from the terminal:
