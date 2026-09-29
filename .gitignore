@@ -9,3 +9,7 @@ traces/
 *.duckdb.tmp
 sales-db-agent.duckdb
 .DS_Store
+
+# Local UI session state
+dashboard/__marimo__/
+__marimo__/

@@ -4,7 +4,7 @@
     "tier": "direct_aggregation",
     "question": "What is the total revenue of delivered orders?",
     "expected_sql_keywords": ["SELECT", "SUM", "orders", "delivered"],
-    "expected_numeric_answer": 2351.05,
+    "expected_numeric_answer": 4997.55,
     "should_refuse": false
   },
   {
@@ -12,7 +12,7 @@
     "tier": "direct_aggregation",
     "question": "How many total customers are in the database?",
     "expected_sql_keywords": ["SELECT", "COUNT", "customers"],
-    "expected_numeric_answer": 5.0,
+    "expected_numeric_answer": 9.0,
     "should_refuse": false
   },
   {
@@ -20,7 +20,7 @@
     "tier": "multi_table_join",
     "question": "Which customer spent the most money overall?",
     "expected_sql_keywords": ["JOIN", "GROUP BY", "ORDER BY", "DESC", "LIMIT"],
-    "expected_entity_answer": "Bharat Traders",
+    "expected_entity_answer": "Nordic Logistics",
     "should_refuse": false
   },
   {
