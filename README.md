@@ -1,63 +1,85 @@
-# Sales-DB Autonomous Agent
+# Autonomous Sales Database Agent
 
-An autonomous sales analytics agent that translates natural-language business questions into safe, verified SQL queries over a PostgreSQL sales database using semantic schema discovery, defense-in-depth query guardrails, and dynamic LLM model selection.
+A production-grade, multi-provider ReAct agent that translates natural language business inquiries into safe, verified SQL queries over PostgreSQL using semantic schema discovery, AST-level query guardrails, and dynamic model routing.
 
 ---
 
-## Technical Stack & Architecture
+## Architecture & Technology Stack
 
-- **Runtime & Environment:** Python 3.12+, managed via `uv`.
-- **LLM & Function Calling:** Google Gemini API (`google-genai` SDK) with dynamic runtime endpoint discovery.
+- **Runtime Environment:** Python 3.12+ managed with `uv`.
+- **Orchestration Layer:** ReAct loop powered by `litellm` with dynamic provider discovery (`gemini-3.5-flash-lite`, `gpt-4o-mini`, `claude-3-5-haiku`).
 - **Relational Data Store:** PostgreSQL 16 enforcing relational integrity (`sales.customers`, `sales.products`, `sales.orders`).
-- **Semantic Layer & Vector Store:** `pgvector` with HNSW indexing (`vector_cosine_ops`) over business schema documentation cards.
-- **Embedding Engine:** Local, CPU-optimized ONNX runtime inference (`Xenova/all-MiniLM-L6-v2`) generating normalized 384-dimensional dense vectors without heavy framework overhead.
-- **Security & Guardrails:** Strict read-only query tripwires, AST-level mutation blocking (`INSERT`, `UPDATE`, `DROP`, etc.), automatic subquery wrapping, and result set row capping (`LIMIT 20`).
+- **Semantic Layer & Vector Index:** `pgvector` with HNSW cosine indexing (`vector_cosine_ops`) over business schema documentation.
+- **Embedding Pipeline:** Local CPU-optimized ONNX inference (`Xenova/all-MiniLM-L6-v2`) generating 384-dimensional normalized embeddings.
+- **Execution Guardrails:** Strict read-only transaction tripwires, AST mutation blocking via `sqlglot` (`INSERT`, `UPDATE`, `DROP`, `ALTER`), and mandatory result set capping (`LIMIT 20`).
 
 ---
 
-## Implementation Roadmap
+## Project Structure
 
-- [x] **Stage 0: Environment & Database Foundations**
-  - Dependency isolation and lockfile management via `uv`.
-  - PostgreSQL 16 database provisioning with relational schemas, foreign keys, and seed data.
-  - Secret isolation using `.env` boundaries.
+```text
+├── data/
+│   ├── schema_docs.jsonl      # Schema documentation cards
+│   └── seed.sql               # Base relational seed data
+├── models/                    # Local ONNX model weights
+├── scripts/
+│   ├── download_model.py      # ONNX weights fetcher
+│   ├── seed_database.py       # Idempotent DDL & data bootstrapper
+│   └── verify_stage3.py       # End-to-end evaluation harness
+├── src/
+│   └── sales_agent/
+│       ├── agent.py           # Core ReAct reasoning engine
+│       ├── app.py             # Streamlit analytics dashboard
+│       ├── gateway.py         # Multi-provider model discovery
+│       └── tools.py           # Introspection, pgvector search & safe SQL executor
+├── pyproject.toml             # Project manifest and dependencies
+└── .env.example               # Environment variable templates
 
-- [x] **Stage 1: Semantic Schema Retrieval Layer**
-  - Local ONNX embedding engine (`OnnxEmbedder`) producing L2-normalized 384-d vectors.
-  - In-database vector store (`schema_docs`) using `pgvector` with HNSW cosine indexing.
-  - Semantic router ingestion and top-$k$ retrieval verification against business queries.
 
-- [x] **Stage 2: Tool Contracts & Execution Guardrails**
-  - Schema discovery actuators: `list_tables` and `describe_table` via `information_schema`.
-  - Semantic tool integration: `search_schema` backed by `pgvector`.
-  - Safe query executor: `run_sql` with regex tripwires, semicolon sanitization, and subquery row limits.
-  - Dynamic Gemini model discovery prioritizing low-latency tool-calling endpoints (`gemini-2.5-flash`).
 
-- [ ] **Stage 3: Autonomous Agentic Loop (ReAct)**
-  - Dynamic reasoning, execution, error observation, and self-correction cycles.
-  - Token and step budget caps.
+Quickstart (Clone & Run)
+1. Prerequisites
+Ensure you have the following installed:
 
-- [ ] **Stage 4: Model Context Protocol (MCP)**
-  - Out-of-process capability serving over `stdio` via FastMCP.
+uv (Fast Python package manager)
 
-- [ ] **Stage 5: Observability & Analytical Store**
-  - Pipeline trace ingestion via `dlt` into DuckDB; interactive dashboards with Marimo.
+PostgreSQL 16+ with the pgvector extension enabled
 
-- [ ] **Stage 6: System Evaluations & Benchmarking**
-  - Retrieval metrics (MRR, Hit Rate@K) and trajectory execution grading.
+2. Environment Configuration
+Clone the repository and copy the environment template:
 
----
+Bash
+cp .env.example .env
+Configure your .env file:
 
-## Security & Guardrails
+Code snippet
+DATABASE_URL=postgresql://<user>:<password>@localhost:5432/<dbname>
+GEMINI_API_KEY=your_gemini_api_key_here
+(Optional: Provide OPENAI_API_KEY or ANTHROPIC_API_KEY to switch providers dynamically).
 
-- **Zero Mutation Surface:** The database interface permits only read-only `SELECT` and `WITH` statements. Modifying statements (`DROP`, `ALTER`, `TRUNCATE`, `DELETE`, `UPDATE`) are rejected before touching the connection.
-- **Unbounded Scan Protection:** All incoming queries are sanitized and wrapped in an outer subquery (`LIMIT 21`) to prevent token exhaustion and out-of-memory errors.
-- **Zero Secret Exposure:** Credentials and API keys reside exclusively in local environment files ignored by version control.
+3. Dependency Installation & Database Setup
+Install the locked dependencies and provision the database:
 
----
+Bash
+# Install virtual environment and packages
+uv sync
 
-## License & Intellectual Property
+# Idempotently provision schema, tables, seed data, and vector definitions
+uv run python scripts/seed_database.py
 
-Copyright 2026 Akshay Runthala. All rights reserved.
 
-This source code and related documentation are made publicly available on GitHub strictly for viewing, inspection, and reference purposes. No license is granted to copy, reproduce, modify, distribute, publish, sublicense, or create derivative works from any part of this software without prior express written permission. Refer to `LICENSE` for formal terms.
+4. Automated Verification Suite
+Run the regression harness to verify database connectivity, tool calling, and ground-truth reasoning:
+
+Bash
+uv run python scripts/verify_stage3.py
+Expected output:
+
+Plaintext
+[PASS] Agent successfully reasoned, queried SQL, and verified ground truth (2351.05).
+5. Launch the Interactive Dashboard
+Start the local Streamlit application:
+
+Bash
+uv run streamlit run src/sales_agent/app.py
+Open your browser at http://localhost:8501 to test conversational SQL generation.

@@ -11,17 +11,21 @@ dependencies = [
     "fastmcp>=4.0.10",
     "google-genai>=2.25.0",
     "huggingface-hub>=1.33.0",
+    "litellm>=1.103.0",
     "marimo>=0.25.0",
     "numpy>=2.5.3",
     "onnxruntime>=1.30.0",
+    "psycopg2-binary>=2.9.13",
     "psycopg[binary]>=3.3.6",
     "pydantic>=2.13.5",
     "python-dotenv>=1.2.3",
+    "streamlit>=1.64.0",
     "tokenizers>=0.23.2",
 ]
 
 [project.scripts]
 sales-db-agent = "sales_db_agent:main"
+sales-agent = "sales_agent.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.11.15,<0.12.0"]
@@ -32,3 +36,4 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.16.9",
 ]
+
