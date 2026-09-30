@@ -96,3 +96,62 @@ def run_sql(sql: str) -> dict[str, Any]:
         "columns": cols,
         "rows": [list(map(str, r)) for r in rows]
     }
+def get_schema(table_name: str | None = None) -> dict[str, Any]:
+    """Inspect tables, columns, and foreign keys directly from the live database.
+    
+    Args:
+        table_name: Optional name of a table (e.g. 'orders' or 'sales.orders').
+                    If None, returns all accessible tables in the sales database.
+    """
+    with get_conn() as conn:
+        # Case A: Return table inventory if no table is specified
+        if not table_name:
+            rows = conn.execute("""
+                SELECT table_schema, table_name 
+                FROM information_schema.tables
+                WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+                ORDER BY table_schema, table_name;
+            """).fetchall()
+            return {"tables": [f"{r[0]}.{r[1]}" for r in rows]}
+
+        # Case B: Specific table detail inspection
+        raw_name = table_name.strip()
+        clean_name = raw_name.split(".")[-1] if "." in raw_name else raw_name
+        
+        # 1. Fetch column specifications
+        col_rows = conn.execute("""
+            SELECT column_name, data_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = 'sales' AND table_name = %s
+            ORDER BY ordinal_position;
+        """, (clean_name,)).fetchall()
+
+        if not col_rows:
+            return {"error": f"Table '{table_name}' not found. Call get_schema() with no args to list tables."}
+
+        # 2. Fetch foreign key relationships
+        fk_rows = conn.execute("""
+            SELECT
+                kcu.column_name,
+                ccu.table_name AS foreign_table_name,
+                ccu.column_name AS foreign_column_name
+            FROM information_schema.table_constraints AS tc
+            JOIN information_schema.key_column_usage AS kcu
+                ON tc.constraint_name = kcu.constraint_name
+                AND tc.table_schema = kcu.table_schema
+            JOIN information_schema.constraint_column_usage AS ccu
+                ON ccu.constraint_name = tc.constraint_name
+                AND ccu.table_schema = tc.table_schema
+            WHERE tc.constraint_type = 'FOREIGN KEY'
+              AND tc.table_schema = 'sales'
+              AND tc.table_name = %s;
+        """, (clean_name,)).fetchall()
+
+        return {
+            "table": f"sales.{clean_name}",
+            "columns": [{"name": r[0], "type": r[1], "nullable": r[2] == "YES"} for r in col_rows],
+            "foreign_keys": [
+                {"column": r[0], "references_table": f"sales.{r[1]}", "references_column": r[2]}
+                for r in fk_rows
+            ]
+        }

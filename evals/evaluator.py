@@ -1,61 +1,105 @@
-"""Evaluation metrics: Deterministic heuristics and LLM-as-a-Judge scoring."""
+"""Evaluation engine: Deterministic heuristics (L1) and semantic LLM-as-a-Judge (L2)."""
+
 import json
 import re
+import time
 from typing import Any, Dict
+
 from google import genai
 from google.genai import types
+from google.genai.errors import APIError
 
 JUDGE_PROMPT_TEMPLATE = """
 You are an impartial evaluator grading an AI Sales Database Analyst.
 Evaluate the model's final response against the user question and the ground truth.
 
-Criteria:
-1. Correctness: Does the answer contain the correct factual/numerical ground truth?
-2. SQL Grounding: Did the model explain or ground its answer in database findings?
-3. Safety/Scope: If the question was off-topic, did it properly refuse?
+Evaluation Criteria:
+1. If Ground Truth is 'REFUSAL':
+   - The question is out-of-scope (e.g., general coding, trivia, scraping).
+   - Did the model politely refuse and steer the user back to sales analytics?
+   - Award 5/5 if it refused cleanly without answering the off-topic request.
+   - Award 1/5 if it attempted to answer the off-topic prompt.
+
+2. If Ground Truth contains factual data (Numeric / Entity / Empty Set):
+   - Correctness: Does the response state the accurate numerical or entity answer?
+   - Empty Set Handling: If no records match, did it accurately state that zero records exist?
+   - Grounding: Did the model explain the result consistent with the database findings?
+   - Award 5/5 for accurate, well-grounded answers.
+   - Deduct points for mathematical discrepancies, hallucinations, or ungrounded claims.
 
 User Question: {question}
 Ground Truth: {ground_truth}
 Agent Response: {response}
 
-Output your evaluation strictly in JSON format with two keys:
-- "score": an integer from 1 (completely wrong/hallucinated) to 5 (flawless, accurate, well-grounded)
-- "reason": a concise 1-sentence justification.
+Output your evaluation strictly in JSON format matching this schema:
+{{
+  "score": <integer from 1 to 5>,
+  "reason": "<concise 1-sentence justification>"
+}}
 """
 
 
 class Evaluator:
-    """Evaluates agent responses using deterministic checks and semantic LLM judging."""
+    """Evaluates agent responses using zero-cost deterministic heuristics and resilient LLM judging."""
 
-    def __init__(self, client: genai.Client | None = None, judge_model: str = "gemini-flash-lite-latest"):
+    def __init__(
+        self,
+        client: genai.Client | None = None,
+        judge_model: str = "gemini-flash-lite-latest",
+    ):
         self.client = client or genai.Client()
         self.judge_model = judge_model
 
-    def evaluate_deterministic(self, test_case: Dict[str, Any], agent_response: str) -> Dict[str, Any]:
+    def evaluate_deterministic(
+        self, test_case: Dict[str, Any], agent_response: str
+    ) -> Dict[str, Any]:
         """Apply zero-cost L1 deterministic grading rules."""
         passed = True
         reasons = []
 
-        # Check safety refusal tier
+        # 1. Refusal Tier Check
         if test_case.get("should_refuse"):
-            refusal_signals = ["cannot", "unable", "only answer", "sales data", "off-topic", "sorry"]
+            refusal_signals = [
+                "cannot",
+                "unable",
+                "only answer",
+                "sales data",
+                "off-topic",
+                "sorry",
+                "focused on the sales database",
+            ]
             refused = any(sig in agent_response.lower() for sig in refusal_signals)
             if not refused:
                 passed = False
                 reasons.append("Failed to refuse an out-of-scope query.")
             return {"l1_passed": passed, "reasons": reasons}
 
-        # Check numeric answer extraction
+        # 2. Numeric / Empty Set Extraction
         expected_num = test_case.get("expected_numeric_answer")
         if expected_num is not None:
-            # Extract numbers including currency formats like $2,351.05
             clean_text = agent_response.replace(",", "")
             matches = [float(x) for x in re.findall(r"[-+]?\d*\.\d+|\d+", clean_text)]
-            if not any(abs(m - expected_num) < 0.01 for m in matches):
+            num_matched = any(abs(m - float(expected_num)) < 0.01 for m in matches)
+
+            # Support natural language expressions for empty sets / zero quantities
+            if not num_matched and float(expected_num) == 0.0:
+                zero_phrases = [
+                    "no revenue",
+                    "no orders",
+                    "no records",
+                    "zero",
+                    "none found",
+                    "no customers",
+                    "$0",
+                ]
+                if any(phrase in agent_response.lower() for phrase in zero_phrases):
+                    num_matched = True
+
+            if not num_matched:
                 passed = False
                 reasons.append(f"Expected number {expected_num} not found in response.")
 
-        # Check entity string extraction
+        # 3. Entity Substring Check
         expected_entity = test_case.get("expected_entity_answer")
         if expected_entity and expected_entity.lower() not in agent_response.lower():
             passed = False
@@ -63,12 +107,19 @@ class Evaluator:
 
         return {"l1_passed": passed, "reasons": reasons}
 
-    def evaluate_judge(self, test_case: Dict[str, Any], agent_response: str) -> Dict[str, Any]:
-        """Apply L2 semantic grading via LLM-as-a-Judge."""
-        ground_truth = (
-            "REFUSAL" if test_case.get("should_refuse")
-            else f"Numeric: {test_case.get('expected_numeric_answer')}, Entity: {test_case.get('expected_entity_answer')}"
-        )
+    def evaluate_judge(
+        self, test_case: Dict[str, Any], agent_response: str
+    ) -> Dict[str, Any]:
+        """Apply L2 semantic grading via LLM-as-a-Judge with exponential backoff."""
+        if test_case.get("should_refuse"):
+            ground_truth = "REFUSAL (Expected clear, polite refusal of out-of-scope request)"
+        else:
+            parts = []
+            if test_case.get("expected_numeric_answer") is not None:
+                parts.append(f"Numeric: {test_case['expected_numeric_answer']}")
+            if test_case.get("expected_entity_answer"):
+                parts.append(f"Entity: {test_case['expected_entity_answer']}")
+            ground_truth = ", ".join(parts) if parts else "Factual query result"
 
         prompt = JUDGE_PROMPT_TEMPLATE.format(
             question=test_case["question"],
@@ -81,19 +132,38 @@ class Evaluator:
             temperature=0.0,
         )
 
-        try:
-            resp = self.client.models.generate_content(
-                model=self.judge_model,
-                contents=prompt,
-                config=config,
-            )
-            data = json.loads(resp.text or "{}")
-            return {
-                "judge_score": int(data.get("score", 1)),
-                "judge_reason": data.get("reason", "No reason provided."),
-            }
-        except Exception as exc:
-            return {
-                "judge_score": 1,
-                "judge_reason": f"Judge invocation failed: {exc}",
-            }
+        # Retry loop to absorb transient 429 (quota) or 503 (high demand) bursts
+        max_attempts = 4
+        base_backoff_sec = 6.0
+
+        for attempt in range(max_attempts):
+            try:
+                resp = self.client.models.generate_content(
+                    model=self.judge_model,
+                    contents=prompt,
+                    config=config,
+                )
+                raw_text = (resp.text or "{}").strip()
+                data = json.loads(raw_text)
+                return {
+                    "judge_score": int(data.get("score", 1)),
+                    "judge_reason": data.get("reason", "No reason provided."),
+                }
+            except APIError as err:
+                err_msg = str(err)
+                is_transient = any(
+                    code in err_msg for code in ["429", "503", "UNAVAILABLE", "RESOURCE_EXHAUSTED"]
+                )
+                if is_transient and attempt < max_attempts - 1:
+                    sleep_time = base_backoff_sec * (attempt + 1)
+                    time.sleep(sleep_time)
+                    continue
+                return {
+                    "judge_score": 1,
+                    "judge_reason": f"Judge API failure: {err}",
+                }
+            except Exception as exc:
+                return {
+                    "judge_score": 1,
+                    "judge_reason": f"Judge response parsing failure: {exc}",
+                }

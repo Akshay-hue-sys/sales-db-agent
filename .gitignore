@@ -13,3 +13,7 @@ sales-db-agent.duckdb
 # Local UI session state
 dashboard/__marimo__/
 __marimo__/
+.env
+__pycache__/
+.ruff_cache/
+*.duckdb

@@ -1,22 +1,22 @@
-"""Test harness: Runs benchmark suites against the agent and records evaluation metrics."""
+"""Evaluation runner: Executes test suite, collects metrics, and reports scorecard."""
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict, List
 
 from evals.evaluator import Evaluator
 from sales_agent.agent import run_agent
 
-SUITE_PATH = Path(__file__).parent / "test_suite.json"
-RESULTS_PATH = Path(__file__).parent / "results.json"
+SUITE_FILE = Path(__file__).parent / "test_suite.json"
+RESULTS_FILE = Path(__file__).parent / "results.json"
 
 
-def run_benchmark() -> List[Dict[str, Any]]:
-    """Execute the full evaluation benchmark and aggregate results."""
-    if not SUITE_PATH.exists():
-        raise FileNotFoundError(f"Test suite not found at {SUITE_PATH}")
+def run_benchmarks() -> None:
+    """Run all configured test cases and print a structured benchmark report."""
+    if not SUITE_FILE.exists():
+        print(f"Error: Test suite file not found at {SUITE_FILE}")
+        return
 
-    test_cases = json.loads(SUITE_PATH.read_text(encoding="utf-8"))
+    test_cases = json.loads(SUITE_FILE.read_text())
     evaluator = Evaluator()
     results = []
 
@@ -24,69 +24,61 @@ def run_benchmark() -> List[Dict[str, Any]]:
 
     for tc in test_cases:
         tc_id = tc["id"]
+        tier = tc.get("tier", "unknown")
         question = tc["question"]
-        print(f"-> Running [{tc['tier']}] {tc_id}...")
+        print(f"-> Running [{tier}] {tc_id}...")
 
-        start_time = time.time()
-        try:
-            agent_response = run_agent(question)
-            duration = round(time.time() - start_time, 2)
-            error = None
-        except Exception as exc:
-            agent_response = ""
-            duration = round(time.time() - start_time, 2)
-            error = str(exc)
+        t0 = time.time()
+        agent_resp = run_agent(question)
+        latency = round(time.time() - t0, 2)
 
-        # Apply Evaluation Stack
-        if error:
-            l1_eval = {"l1_passed": False, "reasons": [f"Execution error: {error}"]}
-            l2_eval = {"judge_score": 1, "judge_reason": f"Agent crashed: {error}"}
-        else:
-            l1_eval = evaluator.evaluate_deterministic(tc, agent_response)
-            l2_eval = evaluator.evaluate_judge(tc, agent_response)
+        # L1: Deterministic evaluation (zero token cost)
+        l1_result = evaluator.evaluate_deterministic(tc, agent_resp)
+        l1_passed = l1_result["l1_passed"]
 
-        record = {
+        # L2: Semantic LLM-as-a-Judge evaluation
+        l2_result = evaluator.evaluate_judge(tc, agent_resp)
+        judge_score = l2_result["judge_score"]
+        judge_reason = l2_result["judge_reason"]
+
+        status = "PASS" if l1_passed and judge_score >= 4 else "FAIL"
+        print(f"   [{status}] L1: {l1_passed} | Judge: {judge_score}/5 | Latency: {latency}s")
+        if not l1_passed:
+            print(f"   Notes: {', '.join(l1_result['reasons'])}")
+
+        results.append({
             "id": tc_id,
-            "tier": tc["tier"],
+            "tier": tier,
             "question": question,
-            "duration_sec": duration,
-            "agent_response": agent_response,
-            "l1_passed": l1_eval["l1_passed"],
-            "l1_reasons": l1_eval["reasons"],
-            "judge_score": l2_eval["judge_score"],
-            "judge_reason": l2_eval["judge_reason"],
-            "error": error,
-        }
-        results.append(record)
+            "agent_response": agent_resp,
+            "l1_passed": l1_passed,
+            "l1_reasons": l1_result["reasons"],
+            "judge_score": judge_score,
+            "judge_reason": judge_reason,
+            "latency_seconds": latency,
+        })
 
-        status = "PASS" if record["l1_passed"] and record["judge_score"] >= 4 else "FAIL"
-        print(f"   [{status}] L1: {record['l1_passed']} | Judge: {record['judge_score']}/5 | Latency: {duration}s")
-        if record["l1_reasons"]:
-            print(f"   Notes: {'; '.join(record['l1_reasons'])}")
+        # Pacing throttle: Enforce rate limit compliance for 15 RPM Free Tier ceiling
+        time.sleep(4.0)
 
-    # Persist structured results
-    RESULTS_PATH.write_text(json.dumps(results, indent=2), encoding="utf-8")
-    print(f"\n[DONE] Evaluation run saved to {RESULTS_PATH}")
-    return results
+    RESULTS_FILE.write_text(json.dumps(results, indent=2))
+    print(f"\n[DONE] Evaluation run saved to {RESULTS_FILE}\n")
 
-
-def print_summary(results: List[Dict[str, Any]]) -> None:
-    """Render a terminal score card."""
+    # Render summary metrics
     total = len(results)
-    l1_passes = sum(1 for r in results if r["l1_passed"])
-    avg_judge = sum(r["judge_score"] for r in results) / total if total else 0
-    avg_latency = sum(r["duration_sec"] for r in results) / total if total else 0
+    l1_pass_count = sum(1 for r in results if r["l1_passed"])
+    avg_score = sum(r["judge_score"] for r in results) / total if total else 0.0
+    avg_lat = sum(r["latency_seconds"] for r in results) / total if total else 0.0
 
-    print("\n" + "=" * 55)
+    print("=" * 55)
     print("           BENCHMARK EVALUATION SUMMARY           ")
     print("=" * 55)
     print(f"Total Test Cases      : {total}")
-    print(f"L1 Deterministic Pass : {l1_passes}/{total} ({l1_passes / total * 100:.1f}%)")
-    print(f"Average Judge Score   : {avg_judge:.2f} / 5.0")
-    print(f"Average Turn Latency  : {avg_latency:.2f}s")
+    print(f"L1 Deterministic Pass : {l1_pass_count}/{total} ({l1_pass_count / total * 100:.1f}%)")
+    print(f"Average Judge Score   : {avg_score:.2f} / 5.0")
+    print(f"Average Turn Latency  : {avg_lat:.2f}s")
     print("=" * 55)
 
 
 if __name__ == "__main__":
-    results = run_benchmark()
-    print_summary(results)
+    run_benchmarks()
