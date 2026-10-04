@@ -629,19 +629,13 @@ validated answer
 
 ---
 
-## Good interview explanation
+## Good explanation
 
 > I built a Gemini-based sales agent that lets users ask sales questions in normal English. Gemini decides which approved tool it needs, but Python validates and executes the tools. RAG helps the model understand the schema and business terms, while PostgreSQL provides the actual sales facts. Successful SQL results become evidence objects, and Python checks those evidence references before returning business values. I also added SQL safety, read-only database access, agent limits, privacy-focused tracing, DuckDB trace analytics, and offline tests with fake services.
 
 ---
 
-## Next milestone
 
-The next useful engineering step is to test the real PostgreSQL/pgvector integration in isolation and measure a set of known questions with known SQL/retrieval expectations.
-
-After that, a separately authorized live Gemini test can verify the full end-to-end path.
-
----
 
 ## One sentence to remember
 
