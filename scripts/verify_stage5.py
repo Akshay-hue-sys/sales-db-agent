@@ -71,8 +71,8 @@ def main():
         FROM traces.log_records
         WHERE type = 'usage';
     """).fetchone()
-    print(f"\nToken Consumption Stats:")
-    print(f"  Peak Session Tokens : {token_stats[0]}")
+    print("\nToken Consumption Stats:")
+    print(f"  Peak Request Tokens : {token_stats[0]}")
     print(f"  Avg Tokens per Step : {token_stats[1]:.1f}")
 
     print("\n[PASS] Stage 5.2 DuckDB verification complete.")

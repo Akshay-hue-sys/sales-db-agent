@@ -1,5 +1,5 @@
 """Integrated verification suite for Stage 2 tools, guardrails, and model discovery."""
-from sales_agent.tools import list_tables, describe_table, search_schema, run_sql
+from sales_agent.tools import list_tables, describe_table, run_sql
 from sales_agent.models import discover_model
 
 def test_stage2():

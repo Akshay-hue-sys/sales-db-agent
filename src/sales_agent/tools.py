@@ -1,157 +1,138 @@
-"""Stage 2 tools: The model emits JSON function arguments; this module executes them."""
-import re
-from typing import Any
-from sales_agent.db import get_conn
-from sales_agent.schema_store import search_docs
+"""Five controlled service desks. Only run_sql produces business evidence."""
 
-MAX_ROWS = 20
-MAX_SQL_CHARS = 2000
+import json
 
-FORBIDDEN = re.compile(
-    r"(?i)\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|"
-    r"COPY|CALL|DO|EXECUTE|MERGE|VACUUM)\b"
-)
+from sales_agent.contracts import Status, error_result
+from sales_agent.db import get_read_conn
+from sales_agent.sql_policy import TABLES, validate_sql
 
-def list_tables() -> list[dict[str, str]]:
-    """List every table and view available in the sales database.
-    Call this first to discover what data exists before writing SQL.
-    """
-    with get_conn() as conn:
-        rows = conn.execute("""
-            SELECT table_schema, table_name 
-            FROM information_schema.tables
-            WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-            ORDER BY 1, 2;
-        """).fetchall()
-    return [{"schema": r[0], "table": r[1]} for r in rows]
+MAX_ROWS, MAX_COLUMNS, MAX_CELL_CHARS, MAX_RESULT_BYTES = 20, 32, 2048, 65536
 
-def describe_table(table_name: str) -> list[dict[str, Any]] | dict[str, str]:
-    """Describe the columns of one sales database table.
-    Use after list_tables to learn exact column names and types.
-    
-    Args:
-        table_name: Full table name, e.g. 'sales.orders' or 'sales.customers'.
-    """
-    clean_name = table_name.strip()
-    with get_conn() as conn:
-        rows = conn.execute("""
-            SELECT column_name, data_type, is_nullable 
-            FROM information_schema.columns
-            WHERE table_schema || '.' || table_name = %s
-            ORDER BY ordinal_position;
-        """, (clean_name,)).fetchall()
-        
-    if not rows:
-        return {"error": f"Table '{table_name}' not found. Call list_tables first."}
-    return [{"column": r[0], "type": r[1], "nullable": r[2] == "YES"} for r in rows]
 
-def search_schema(query: str) -> list[dict[str, Any]]:
-    """Semantic search over sales schema doc cards: identify which tables/columns answer
-    a business question (revenue, regions, categories, trends).
-    
-    Args:
-        query: Natural-language phrase describing the business concept.
-    """
-    return search_docs(query, k=5)
+def _read(query, params=()):
+    with get_read_conn() as conn:
+        return conn.execute(query, params).fetchall()
 
-def run_sql(sql: str) -> dict[str, Any]:
-    """Execute a READ-ONLY SQL query against the sales database
-    and return up to 20 rows. Only SELECT/WITH statements are allowed.
-    
-    Args:
-        sql: A single read-only SQL query. Aggregate with SUM/COUNT/AVG
-             and filter with WHERE to keep result sets small.
-    """
-    cleaned_sql = sql.strip()
 
-    if not re.match(r"(?is)^\s*(SELECT|WITH)\b", cleaned_sql):
-        return {"error": "Only SELECT or WITH queries are allowed."}
+def _db_error(exc):
+    if getattr(exc, "sqlstate", None) == "57014":
+        return error_result(Status.TIMEOUT, "STATEMENT_TIMEOUT", "Database statement timed out.")
+    return error_result(Status.DATABASE_ERROR, "DATABASE_ERROR", "Database operation failed.")
 
-    if FORBIDDEN.search(cleaned_sql):
-        return {"error": "Read-only guard: modifying statements are blocked."}
 
-    if len(cleaned_sql) > MAX_SQL_CHARS:
-        return {"error": f"Query too long (max {MAX_SQL_CHARS} characters)."}
+def _table_name(table_name):
+    if not isinstance(table_name, str):
+        raise ValueError
+    name = table_name.strip()
+    if name.startswith("sales."):
+        name = name[6:]
+    if name not in TABLES:
+        raise ValueError
+    return name
 
-    # Strip trailing semicolons and whitespace so SQL subquery wrapping is valid ANSI SQL
-    unwrapped_sql = re.sub(r";+\s*$", "", cleaned_sql)
-    capped_sql = f"SELECT * FROM ({unwrapped_sql}) AS _agent_sub LIMIT {MAX_ROWS + 1}"
 
+def list_tables() -> list[dict]:
+    """List approved sales tables. Returns schema/table pairs or a typed error."""
     try:
-        with get_conn() as conn:
-            cur = conn.execute(capped_sql)
-            cols = [d.name for d in cur.description] if cur.description else []
-            rows = cur.fetchall()
+        rows = _read("""SELECT table_schema, table_name FROM information_schema.tables
+            WHERE table_schema='sales' AND table_name IN ('customers','products','orders') ORDER BY 1,2""")
+        return [{"schema": r[0], "table": r[1]} for r in rows]
     except Exception as exc:
-        return {"error": f"SQL error: {exc}"}
+        return _db_error(exc)
 
-    if len(rows) > MAX_ROWS:
+
+def describe_table(table_name: str) -> list[dict]:
+    """Describe approved sales table columns. table_name: sales.orders etc."""
+    try:
+        name = _table_name(table_name)
+    except ValueError:
+        return error_result(Status.INVALID_REQUEST, "TABLE_NOT_ALLOWED", "Unknown or unapproved sales table.")
+    try:
+        rows = _read(
+            """SELECT column_name,data_type,is_nullable FROM information_schema.columns
+            WHERE table_schema='sales' AND table_name=%s ORDER BY ordinal_position""",
+            (name,),
+        )
+        return [{"column": r[0], "type": r[1], "nullable": r[2] == "YES"} for r in rows]
+    except Exception as exc:
+        return _db_error(exc)
+
+
+def get_schema(table_name: str | None = None) -> dict:
+    """Inventory sales tables or retrieve exact columns and foreign-key links."""
+    if table_name is None:
+        result = list_tables()
+        return result if isinstance(result, dict) else {"tables": [f"{r['schema']}.{r['table']}" for r in result]}
+    try:
+        name = _table_name(table_name)
+    except ValueError:
+        return error_result(Status.INVALID_REQUEST, "TABLE_NOT_ALLOWED", "Unknown or unapproved sales table.")
+    columns = describe_table(name)
+    if isinstance(columns, dict):
+        return columns
+    if not columns:
+        return error_result(Status.NO_DATA, "TABLE_NOT_FOUND", "Approved table has no visible columns.")
+    try:
+        rows = _read(
+            """SELECT kcu.column_name, ccu.table_schema, ccu.table_name, ccu.column_name
+            FROM information_schema.table_constraints tc
+            JOIN information_schema.key_column_usage kcu
+            ON tc.constraint_name=kcu.constraint_name AND tc.table_schema=kcu.table_schema AND tc.table_name=kcu.table_name
+            JOIN information_schema.constraint_column_usage ccu
+            ON ccu.constraint_name=tc.constraint_name AND ccu.table_schema=tc.table_schema
+            WHERE tc.constraint_type='FOREIGN KEY' AND tc.table_schema='sales' AND tc.table_name=%s""",
+            (name,),
+        )
         return {
-            "columns": cols,
-            "rows": [list(map(str, r)) for r in rows[:MAX_ROWS]],
-            "note": f"Result truncated to {MAX_ROWS} rows; refine query with filters."
-        }
-
-    return {
-        "columns": cols,
-        "rows": [list(map(str, r)) for r in rows]
-    }
-def get_schema(table_name: str | None = None) -> dict[str, Any]:
-    """Inspect tables, columns, and foreign keys directly from the live database.
-    
-    Args:
-        table_name: Optional name of a table (e.g. 'orders' or 'sales.orders').
-                    If None, returns all accessible tables in the sales database.
-    """
-    with get_conn() as conn:
-        # Case A: Return table inventory if no table is specified
-        if not table_name:
-            rows = conn.execute("""
-                SELECT table_schema, table_name 
-                FROM information_schema.tables
-                WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-                ORDER BY table_schema, table_name;
-            """).fetchall()
-            return {"tables": [f"{r[0]}.{r[1]}" for r in rows]}
-
-        # Case B: Specific table detail inspection
-        raw_name = table_name.strip()
-        clean_name = raw_name.split(".")[-1] if "." in raw_name else raw_name
-        
-        # 1. Fetch column specifications
-        col_rows = conn.execute("""
-            SELECT column_name, data_type, is_nullable
-            FROM information_schema.columns
-            WHERE table_schema = 'sales' AND table_name = %s
-            ORDER BY ordinal_position;
-        """, (clean_name,)).fetchall()
-
-        if not col_rows:
-            return {"error": f"Table '{table_name}' not found. Call get_schema() with no args to list tables."}
-
-        # 2. Fetch foreign key relationships
-        fk_rows = conn.execute("""
-            SELECT
-                kcu.column_name,
-                ccu.table_name AS foreign_table_name,
-                ccu.column_name AS foreign_column_name
-            FROM information_schema.table_constraints AS tc
-            JOIN information_schema.key_column_usage AS kcu
-                ON tc.constraint_name = kcu.constraint_name
-                AND tc.table_schema = kcu.table_schema
-            JOIN information_schema.constraint_column_usage AS ccu
-                ON ccu.constraint_name = tc.constraint_name
-                AND ccu.table_schema = tc.table_schema
-            WHERE tc.constraint_type = 'FOREIGN KEY'
-              AND tc.table_schema = 'sales'
-              AND tc.table_name = %s;
-        """, (clean_name,)).fetchall()
-
-        return {
-            "table": f"sales.{clean_name}",
-            "columns": [{"name": r[0], "type": r[1], "nullable": r[2] == "YES"} for r in col_rows],
+            "table": f"sales.{name}",
+            "columns": [{"name": c["column"], "type": c["type"], "nullable": c["nullable"]} for c in columns],
             "foreign_keys": [
-                {"column": r[0], "references_table": f"sales.{r[1]}", "references_column": r[2]}
-                for r in fk_rows
-            ]
+                {"column": r[0], "references_table": f"{r[1]}.{r[2]}", "references_column": r[3]} for r in rows
+            ],
         }
+    except Exception as exc:
+        return _db_error(exc)
+
+
+def search_schema(query: str) -> list[dict]:
+    """Find up to five schema/business guidance cards, never current sales facts."""
+    if not isinstance(query, str) or not query.strip() or len(query) > 1000:
+        return error_result(Status.INVALID_REQUEST, "INVALID_QUERY", "Invalid schema search query.")
+    try:
+        from sales_agent.schema_store import search_docs
+
+        return search_docs(query, k=5)
+    except Exception:
+        return error_result(Status.RETRIEVAL_ERROR, "RETRIEVAL_ERROR", "Schema guidance retrieval failed.")
+
+
+def run_sql(sql: str) -> dict:
+    """Run one analytical SELECT over qualified sales tables, with bounded results."""
+    try:
+        normalized = validate_sql(sql)
+    except ValueError as exc:
+        return error_result(Status.POLICY_REJECTION, "SQL_POLICY", str(exc))
+    try:
+        with get_read_conn() as conn:
+            cursor = conn.execute(f"SELECT * FROM ({normalized}) AS _agent_sub LIMIT {MAX_ROWS + 1}")
+            columns = [d.name for d in cursor.description] if cursor.description else []
+            rows = cursor.fetchmany(MAX_ROWS + 1)
+        if len(columns) > MAX_COLUMNS or len(set(columns)) != len(columns):
+            return error_result(Status.POLICY_REJECTION, "RESULT_BOUND", "Too many or ambiguous result columns.")
+        if any(len(row) != len(columns) for row in rows):
+            return error_result(Status.DATABASE_ERROR, "RESULT_SHAPE", "Unexpected database result shape.")
+        converted = [[None if cell is None else str(cell) for cell in row] for row in rows[:MAX_ROWS]]
+        if any(cell is not None and len(cell) > MAX_CELL_CHARS for row in converted for cell in row):
+            return error_result(Status.POLICY_REJECTION, "RESULT_BOUND", "Result cell exceeded its size bound.")
+        result = {
+            "status": str(Status.SUCCESS if rows else Status.NO_DATA),
+            "sql": normalized,
+            "columns": columns,
+            "rows": converted,
+            "truncated": len(rows) > MAX_ROWS,
+        }
+        if len(json.dumps(result).encode()) > MAX_RESULT_BYTES:
+            return error_result(Status.POLICY_REJECTION, "RESULT_BOUND", "Result exceeded its byte bound.")
+        return result
+    except Exception as exc:
+        return _db_error(exc)

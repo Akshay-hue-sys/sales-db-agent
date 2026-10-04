@@ -1,2 +1,7 @@
+"""Both installed console commands delegate to the same CLI."""
+
+
 def main() -> None:
-    print("Hello from sales-db-agent!")
+    from sales_agent.cli import main as cli_main
+
+    cli_main()

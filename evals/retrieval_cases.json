@@ -1,0 +1,7 @@
+[
+  {"query":"revenue by region","expected_any":["doc_customers_region","doc_join_orders_customers"]},
+  {"query":"average order value","expected_any":["doc_kpi_aov","doc_orders_total"]},
+  {"query":"cancelled orders last quarter","expected_any":["doc_orders_status","doc_orders_date"]},
+  {"query":"which products are Hardware","expected_any":["doc_products_category","doc_products"]},
+  {"query":"customer signup growth by month","expected_any":["doc_customers_signup"]}
+]

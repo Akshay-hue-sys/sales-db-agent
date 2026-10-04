@@ -7,14 +7,14 @@ project_root = Path(__file__).resolve().parents[2]
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from fastmcp import FastMCP
-from sales_agent.tools import search_schema, run_sql
+from fastmcp import FastMCP  # noqa: E402 - existing explicit script path bootstrap.
+from sales_agent.tools import search_schema, run_sql  # noqa: E402
 
 # Instantiate FastMCP server per Stage S4.1 specification
 mcp = FastMCP("Sales DB Server")
 
 @mcp.tool()
-def mcp_search_schema(query: str) -> list[dict]:
+def mcp_search_schema(query: str) -> list[dict] | dict:
     """Search sales DB schema docs to find relevant tables and columns."""
     return search_schema(query)
 

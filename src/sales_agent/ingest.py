@@ -1,7 +1,7 @@
 """Trace Pipeline: Ingest JSONL agent traces into DuckDB via dlt."""
+
 import json
 from pathlib import Path
-import dlt
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TRACE_FILE = PROJECT_ROOT / "traces" / "log_records.jsonl"
@@ -21,23 +21,16 @@ def trace_records():
                 yield json.loads(line)
 
 
-# Configure dlt pipeline writing specifically to sales-db-agent.duckdb
-pipeline = dlt.pipeline(
-    pipeline_name="sales_agent_traces",
-    destination=dlt.destinations.duckdb(str(DUCKDB_PATH)),
-    dataset_name="traces"
-)
-
-
 def ingest() -> None:
     """Execute the ELT load job."""
+    import dlt
+
+    # Construct only for an explicitly invoked ingestion operation.
+    pipeline = dlt.pipeline(
+        pipeline_name="sales_agent_traces", destination=dlt.destinations.duckdb(str(DUCKDB_PATH)), dataset_name="traces"
+    )
     info = pipeline.run(
-        dlt.resource(
-            trace_records(),
-            name="log_records",
-            primary_key="session_id",
-            write_disposition="append"
-        )
+        dlt.resource(trace_records(), name="log_records", primary_key="session_id", write_disposition="append")
     )
     print(info)
 

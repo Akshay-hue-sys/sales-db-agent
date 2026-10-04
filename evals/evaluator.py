@@ -2,12 +2,13 @@
 
 import json
 import re
-import time
 from typing import Any, Dict
 
 from google import genai
 from google.genai import types
-from google.genai.errors import APIError
+from sales_agent.config import configured_model
+from sales_agent.models import ModelError, discover_model, generate, get_client
+import time
 
 JUDGE_PROMPT_TEMPLATE = """
 You are an impartial evaluator grading an AI Sales Database Analyst.
@@ -45,14 +46,12 @@ class Evaluator:
     def __init__(
         self,
         client: genai.Client | None = None,
-        judge_model: str = "gemini-flash-lite-latest",
+        judge_model: str | None = None,
     ):
-        self.client = client or genai.Client()
+        self.client = client
         self.judge_model = judge_model
 
-    def evaluate_deterministic(
-        self, test_case: Dict[str, Any], agent_response: str
-    ) -> Dict[str, Any]:
+    def evaluate_deterministic(self, test_case: Dict[str, Any], agent_response: str) -> Dict[str, Any]:
         """Apply zero-cost L1 deterministic grading rules."""
         passed = True
         reasons = []
@@ -107,10 +106,8 @@ class Evaluator:
 
         return {"l1_passed": passed, "reasons": reasons}
 
-    def evaluate_judge(
-        self, test_case: Dict[str, Any], agent_response: str
-    ) -> Dict[str, Any]:
-        """Apply L2 semantic grading via LLM-as-a-Judge with exponential backoff."""
+    def evaluate_judge(self, test_case: Dict[str, Any], agent_response: str) -> Dict[str, Any]:
+        """Apply L2 semantic grading via LLM-as-a-Judge with bounded provider retry and typed unavailability."""
         if test_case.get("should_refuse"):
             ground_truth = "REFUSAL (Expected clear, polite refusal of out-of-scope request)"
         else:
@@ -132,38 +129,24 @@ class Evaluator:
             temperature=0.0,
         )
 
-        # Retry loop to absorb transient 429 (quota) or 503 (high demand) bursts
-        max_attempts = 4
-        base_backoff_sec = 6.0
-
-        for attempt in range(max_attempts):
-            try:
-                resp = self.client.models.generate_content(
-                    model=self.judge_model,
-                    contents=prompt,
-                    config=config,
-                )
-                raw_text = (resp.text or "{}").strip()
-                data = json.loads(raw_text)
-                return {
-                    "judge_score": int(data.get("score", 1)),
-                    "judge_reason": data.get("reason", "No reason provided."),
-                }
-            except APIError as err:
-                err_msg = str(err)
-                is_transient = any(
-                    code in err_msg for code in ["429", "503", "UNAVAILABLE", "RESOURCE_EXHAUSTED"]
-                )
-                if is_transient and attempt < max_attempts - 1:
-                    sleep_time = base_backoff_sec * (attempt + 1)
-                    time.sleep(sleep_time)
-                    continue
-                return {
-                    "judge_score": 1,
-                    "judge_reason": f"Judge API failure: {err}",
-                }
-            except Exception as exc:
-                return {
-                    "judge_score": 1,
-                    "judge_reason": f"Judge response parsing failure: {exc}",
-                }
+        try:
+            if self.client is None:
+                self.client = get_client()
+            if self.judge_model is None:
+                self.judge_model = discover_model(self.client, preferred=configured_model())
+            resp = generate(
+                self.client, model=self.judge_model, contents=prompt, config=config, deadline=time.monotonic() + 45
+            )
+            data = json.loads(resp.text or "{}")
+            score = data.get("score")
+            if type(score) is not int or not 1 <= score <= 5:
+                raise ValueError("Invalid score")
+            return {"judge_score": score, "judge_reason": "Model judge completed.", "judge_status": "SUCCESS"}
+        except ModelError as exc:
+            return {"judge_score": None, "judge_reason": "Judge unavailable.", "judge_status": str(exc.category)}
+        except ValueError, TypeError, AttributeError:
+            return {
+                "judge_score": None,
+                "judge_reason": "Invalid judge response.",
+                "judge_status": "MALFORMED_RESPONSE",
+            }

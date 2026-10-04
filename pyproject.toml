@@ -20,6 +20,7 @@ dependencies = [
     "pydantic>=2.13.5",
     "python-dotenv>=1.2.3",
     "streamlit>=1.64.0",
+    "sqlglot>=30.20.0,<31",
     "tokenizers>=0.23.2",
 ]
 
@@ -37,3 +38,13 @@ dev = [
     "ruff>=0.16.9",
 ]
 
+
+[tool.pytest.ini_options]
+testpaths = ["tests/offline"]
+addopts = "-p no:cacheprovider"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "B"]

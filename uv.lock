@@ -2736,6 +2736,7 @@ dependencies = [
     { name = "psycopg2-binary" },
     { name = "pydantic" },
     { name = "python-dotenv" },
+    { name = "sqlglot" },
     { name = "streamlit" },
     { name = "tokenizers" },
 ]
@@ -2762,6 +2763,7 @@ requires-dist = [
     { name = "psycopg2-binary", specifier = ">=2.9.13" },
     { name = "pydantic", specifier = ">=2.13.5" },
     { name = "python-dotenv", specifier = ">=1.2.3" },
+    { name = "sqlglot", specifier = ">=30.20.0,<31" },
     { name = "streamlit", specifier = ">=1.64.0" },
     { name = "tokenizers", specifier = ">=0.23.2" },
 ]

@@ -1,6 +1,8 @@
 """Interactive Command-Line Interface (REPL) for the Sales DB Autonomous Agent."""
+
 import sys
 from sales_agent.agent import SalesAgent
+
 
 def main():
     print("=" * 60)
@@ -11,7 +13,7 @@ def main():
     try:
         # Initialize the agent once to avoid repeated runtime discovery overhead
         agent = SalesAgent()
-        print(f"[*] Agent online. Target model: {agent.model}\n")
+        print(f"[*] Agent online. Target model: {agent.model or 'catalog selection on first use'}\n")
     except Exception as err:
         print(f"[!] Initialization error: {err}")
         sys.exit(1)
@@ -41,11 +43,12 @@ def main():
             print(answer)
             print("-" * 60 + "\n")
 
-        except (KeyboardInterrupt, EOFError):
+        except KeyboardInterrupt, EOFError:
             print("\nSession interrupted. Exiting.")
             break
         except Exception as err:
             print(f"\n[Error during execution]: {err}\n")
+
 
 if __name__ == "__main__":
     main()

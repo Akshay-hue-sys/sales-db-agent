@@ -1,19 +1,12 @@
 """Idempotent database bootstrap script matching physical database catalog."""
+
 import os
 import sys
 import psycopg2
-from dotenv import load_dotenv
-
-load_dotenv()
-
-DATABASE_URL = os.environ.get("DATABASE_URL")
-if not DATABASE_URL:
-    print("[ERROR] DATABASE_URL is not configured in .env file.")
-    sys.exit(1)
+from sales_agent.schema_store import STORE_DDL
 
 # Canonical DDL matching your PostgreSQL information_schema
 DDL_SCRIPT = """
-CREATE EXTENSION IF NOT EXISTS vector;
 CREATE SCHEMA IF NOT EXISTS sales;
 
 CREATE TABLE IF NOT EXISTS sales.customers (
@@ -40,14 +33,9 @@ CREATE TABLE IF NOT EXISTS sales.orders (
     order_date DATE DEFAULT CURRENT_DATE
 );
 
-CREATE TABLE IF NOT EXISTS sales.schema_docs (
-    id SERIAL PRIMARY KEY,
-    table_name VARCHAR(128) NOT NULL,
-    column_name VARCHAR(128),
-    description TEXT NOT NULL,
-    embedding vector(384)
-);
 """
+
+DDL_SCRIPT += STORE_DDL
 
 # Defensive DML: seeds only if the respective relation contains 0 rows
 SEED_DATA_SCRIPT = """
@@ -77,10 +65,15 @@ SELECT * FROM (VALUES
 WHERE NOT EXISTS (SELECT 1 FROM sales.orders LIMIT 1);
 """
 
+
 def main() -> None:
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        print("[ERROR] DATABASE_URL is not configured.")
+        sys.exit(1)
     print("[*] Bootstrapping Sales Database...")
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = psycopg2.connect(url)
         conn.autocommit = True
         with conn.cursor() as cur:
             print("  -> Applying DDL Schema & Extensions...")
@@ -91,9 +84,10 @@ def main() -> None:
 
         conn.close()
         print("[SUCCESS] Database bootstrap complete. Schema and seed records verified.")
-    except Exception as exc:
-        print(f"[FAIL] Database bootstrap failed: {exc}")
+    except Exception:
+        print("[FAIL] Database bootstrap failed; check authorized maintenance diagnostics.")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

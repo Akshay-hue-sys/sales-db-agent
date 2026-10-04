@@ -17,3 +17,8 @@ __marimo__/
 __pycache__/
 .ruff_cache/
 *.duckdb
+
+# Private configurations and local evaluation outputs
+.env.*
+evals/results.json
+.pytest_cache/

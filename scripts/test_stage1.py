@@ -23,7 +23,7 @@ def test_pgvector_store():
     assert len(hits) == 3, f"Expected 3 hits, got {len(hits)}"
     for hit in hits:
         assert "id" in hit and "similarity" in hit, "Hit missing required fields"
-        assert 0.0 <= hit["similarity"] <= 1.0, f"Similarity out of bounds: {hit['similarity']}"
+        assert -1.0 <= hit["similarity"] <= 1.0, f"Similarity out of bounds: {hit['similarity']}"
     print(f"  ✓ pgvector loaded {count} cards and executed top-k cosine search.")
 
 if __name__ == "__main__":

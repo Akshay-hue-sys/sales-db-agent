@@ -45,7 +45,7 @@ def _(mo, session_list):
         value="ALL",
         label="Filter by Session ID:"
     )
-    session_dropdown
+    session_dropdown  # noqa: B018 - Marimo renders the final cell expression.
     return (session_dropdown,)
 
 
@@ -54,8 +54,9 @@ def _(conn, session_dropdown):
     # Query summary metrics based on selection
     session_filter = ""
     if session_dropdown.value != "ALL":
-        session_filter = f"WHERE session_id = '{session_dropdown.value}'"
+        session_filter = "WHERE session_id = ?"
 
+    session_params = [] if session_dropdown.value == "ALL" else [session_dropdown.value]
     summary_df = conn.execute(f"""
         SELECT 
             count(*) as total_events,
@@ -64,8 +65,8 @@ def _(conn, session_dropdown):
             COALESCE(MAX(data__total_tokens), 0) as peak_tokens
         FROM traces.log_records
         {session_filter}
-    """).df()
-    return session_filter, summary_df
+    """, session_params).df()
+    return session_filter, session_params, summary_df
 
 
 @app.cell
@@ -76,7 +77,7 @@ def _(mo, summary_df):
             mo.stat(value=str(int(rec["total_events"])), label="Total Events"),
             mo.stat(value=str(int(rec["total_sessions"])), label="Active Sessions"),
             mo.stat(value=str(int(rec["tool_calls"])), label="Tool Invocations"),
-            mo.stat(value=str(int(rec["peak_tokens"])), label="Peak Tokens"),
+            mo.stat(value=str(int(rec["peak_tokens"])), label="Peak Request Tokens"),
         ],
         justify="space-around",
     )
@@ -84,7 +85,7 @@ def _(mo, summary_df):
 
 
 @app.cell
-def _(alt, conn, mo, session_filter):
+def _(alt, conn, mo, session_filter, session_params):
     # Tool breakdown chart
     tool_df = conn.execute(f"""
         SELECT 
@@ -95,7 +96,7 @@ def _(alt, conn, mo, session_filter):
         {session_filter.replace('WHERE', 'AND') if session_filter else ''}
         GROUP BY tool_name
         ORDER BY invocations DESC
-    """).df()
+    """, session_params).df()
 
     if not tool_df.empty:
         chart = (
@@ -112,24 +113,24 @@ def _(alt, conn, mo, session_filter):
     else:
         tool_view = mo.md("_No tool use records found for current selection._")
 
-    tool_view
+    tool_view  # noqa: B018 - Marimo renders the final cell expression.
     return
 
 
 @app.cell
-def _(conn, mo, session_filter):
+def _(conn, mo, session_filter, session_params):
     # Raw event table
     events_df = conn.execute(f"""
         SELECT 
             timestamp,
             session_id,
             type,
-            COALESCE(data__name, data__reason, substr(data, 1, 40)) as payload_summary
+            COALESCE(data__name, data__reason, type) as payload_summary
         FROM traces.log_records
         {session_filter}
         ORDER BY timestamp DESC
         LIMIT 50
-    """).df()
+    """, session_params).df()
 
     mo.md("### Recent Trace Events")
     return (events_df,)

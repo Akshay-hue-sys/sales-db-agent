@@ -1,4 +1,5 @@
 """Seed expansion: Idempotently appends new analytical data across all sales tables."""
+
 from sales_agent.db import get_conn
 
 
@@ -44,16 +45,7 @@ def seed_expansion():
                 ON CONFLICT (id) DO NOTHING;
             """)
 
-            # 4. Insert New Schema Docs (Metadata Catalog Table)
-            print("-> Inserting enriched schema documentation...")
-            cur.execute("""
-                INSERT INTO sales.schema_docs (table_name, column_name, description)
-                VALUES
-                    ('customers', 'region', 'Geographical trade region: Asia, Europe, North America, Oceania'),
-                    ('products', 'category', 'High-level product classification: Software, Security, Hardware'),
-                    ('orders', 'status', 'Lifecycle state of transaction: delivered, shipped, pending, cancelled')
-                ON CONFLICT DO NOTHING;
-            """)
+            # Schema guidance is owned by data/schema_docs.jsonl and load_docs().
 
             # Commit the transaction
             conn.commit()
